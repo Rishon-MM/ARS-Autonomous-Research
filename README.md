@@ -28,7 +28,13 @@ ARS/
 - **Recovery & DLQ**: Checkpointing and dead letter queues for failed tasks to ensure fault tolerance.
 - **Observability**: Structured JSON logging and OpenTelemetry tracing routed to Jaeger UI.
 
-## 🚀 Quick Start (Backend Stack)
+---
+
+## 🎥 Video Demo
+Check out the ARS platform in action! Watch the full video demonstration showing the autonomous agent workflow, orchestration, and crawling process on LinkedIn:
+**[Watch the Demo Video Here](https://www.linkedin.com/posts/rishon-madathimannil-mathew_ai-llm-aiagents-activity-7457753875907969024-_D0Q?utm_source=share&utm_medium=member_desktop&rcm=ACoAADYGqp0BR6J-3Kn-hCYcSjmV_ry2_dE5WgU)**
+
+---
 
 To run the full backend stack (including PostgreSQL, Jaeger, and the Python microservices) via Docker:
 
