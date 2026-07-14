@@ -1,0 +1,33 @@
+# ARS Orchestrator Service — Dependencies
+
+# Core
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+httpx
+
+# LLM Providers
+google-genai
+openai
+
+# Database
+asyncpg
+pgvector
+
+# Knowledge Acquisition
+playwright
+PyMuPDF
+sentence-transformers
+
+# Export
+python-docx
+fpdf2
+
+# Observability
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-httpx

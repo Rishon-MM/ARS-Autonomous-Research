@@ -1,0 +1,83 @@
+
+services:
+  # ─── Data Layer ───────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: postgres-vector
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ars_user
+      POSTGRES_PASSWORD: ars_password
+      POSTGRES_DB: ars_memory
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ars_user -d ars_memory"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ─── Observability ────────────────────────────────────────────
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: jaeger
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC receiver
+      - "4318:4318"     # OTLP HTTP receiver
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    restart: unless-stopped
+
+  # ─── API Layer ────────────────────────────────────────────────
+  api-gateway:
+    build: ./api-gateway
+    container_name: api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - ORCHESTRATOR_SERVICE_URL=http://orchestrator-service:8001
+      - EXPORT_SERVICE_URL=http://export-service:8002
+      # Backward compat aliases
+      - AGENT_SERVICE_URL=http://orchestrator-service:8001
+      - SEARCH_SERVICE_URL=http://orchestrator-service:8001
+    depends_on:
+      - orchestrator-service
+      - export-service
+
+  # ─── Orchestration Layer ──────────────────────────────────────
+  orchestrator-service:
+    build: ./orchestrator-service
+    container_name: orchestrator-service
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql://ars_user:ars_password@postgres:5432/ars_memory
+      - LOCAL_LLAMA_URL=http://host.docker.internal:8080/v1
+      - LOCAL_LLAMA_MODEL=${LOCAL_LLAMA_MODEL}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - LOG_LEVEL=INFO
+      - LOG_FORMAT=json
+      - MAX_PARALLEL_WORKERS=3
+    env_file:
+      - ".env.example"
+    volumes:
+      - paper_pdfs:/app/pdfs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  # ─── Export Layer ─────────────────────────────────────────────
+  export-service:
+    build: ./export-service
+    container_name: export-service
+    ports:
+      - "8002:8002"
+
+volumes:
+  pgdata:
+  paper_pdfs:
