@@ -62,6 +62,7 @@ export function useAgentStream() {
             const dataStr = line.substring(6);
             if (dataStr === "[DONE]") {
               setStatus('done');
+              setSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'success' as const } : s));
               continue;
             }
             try {
@@ -81,7 +82,10 @@ export function useAgentStream() {
                     };
                     return newSteps;
                   } else {
-                    return [...prev, {
+                    const updatedPrev = prev.map(s => 
+                      s.status === 'running' ? { ...s, status: 'success' as const } : s
+                    );
+                    return [...updatedPrev, {
                       step: data.step,
                       message: data.message,
                       status: data.status,
@@ -93,11 +97,14 @@ export function useAgentStream() {
               } else if (data.type === "final_result") {
                 setPapers(data.papers);
                 setStatus('done');
+                setSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'success' as const } : s));
               } else if (data.type === "error") {
                 setError(data.message);
                 setStatus('done');
+                setSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'error' as const } : s));
               } else if (data.type === "completed") {
                 setStatus('done');
+                setSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'success' as const } : s));
               }
             } catch (err) {
               console.error("Failed to parse SSE line:", err);
@@ -108,7 +115,10 @@ export function useAgentStream() {
       
       // If the stream finished but we're still running (e.g. backend crashed and didn't send 'completed')
       setStatus(prev => {
-        if (prev === 'running') return 'done';
+        if (prev === 'running') {
+          setSteps(s => s.map(step => step.status === 'running' ? { ...step, status: 'success' as const } : step));
+          return 'done';
+        }
         return prev;
       });
 

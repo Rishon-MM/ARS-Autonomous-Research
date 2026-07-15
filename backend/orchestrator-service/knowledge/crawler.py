@@ -42,20 +42,18 @@ Your overarching research objective is: "{query}"
 4. Search queries must be validated against the overarching goal before typing.
 
 ## MANDATORY WORKFLOW (Follow these exact JSON actions)
-1. You are already on the search page. Type search: {"action": "type", "selector": "#query", "text": "your search term"}
-2. Get results: {"action": "read_results"}
-3. Open a paper: {"action": "open_paper", "index": 0}
-4. Read abstract: {"action": "read_paper"}
-5. Decide: {"action": "select_paper", "index": 0, "reason": "why"} OR {"action": "reject_paper", "index": 0, "reason": "why"}
-6. Go back: {"action": "go_back"}
-7. Repeat steps 3-6 for index 1, 2, 3, etc.
-8. Finish when you have at least 10 papers: {"action": "done", "summary": "Finished"}
+1. Get results: {"action": "read_results"}
+2. Open a paper: {"action": "open_paper", "index": 0}
+3. Read abstract: {"action": "read_paper"}
+4. Decide: {"action": "select_paper", "index": 0, "reason": "why"} OR {"action": "reject_paper", "index": 0, "reason": "why"}
+5. Go back: {"action": "go_back"}
+6. Repeat steps 2-5 for index 1, 2, 3, etc.
+7. Finish when you have at least 10 papers: {"action": "done", "summary": "Finished"}
 
 ## Available actions (reply with ONLY ONE JSON object per turn)
 | Action | JSON |
 |--------|------|
 | Navigate | {"action": "open_url", "url": "..."} |
-| Type & Submit | {"action": "type", "selector": "...", "text": "..."} |
 | Click | {"action": "click", "selector": "..."} |
 | Go back | {"action": "go_back"} |
 | Scroll down | {"action": "scroll_down"} |
@@ -70,7 +68,6 @@ Your overarching research objective is: "{query}"
 
 ## Rules
 - Reply with ONLY the JSON action, nothing else. No markdown, no conversational text.
-- Use the selector "#query" for typing the search.
 - You must read each paper's abstract before selecting it.
 - Collect at least 10 relevant papers.
 """
@@ -133,18 +130,43 @@ class KnowledgeCrawler:
             unique = unique[:FINAL_SELECT_COUNT]
 
         # Ingest papers into knowledge base
-        for paper in unique:
+        for i, paper in enumerate(unique):
+            title = paper.get("title", "Unknown")
+            if sse_callback:
+                import json
+                await sse_callback(json.dumps({
+                    "type": "agent_step",
+                    "step": 1000 + i,
+                    "message": f"Ingesting ({i+1}/{len(unique)}): {title[:50]}...",
+                    "status": "running"
+                }))
             try:
                 ingest_result = await self.ingestion(
-                    title=paper.get("title", "Unknown"),
+                    title=title,
                     pdf_url=paper.get("pdfUrl", ""),
                     paper_id=paper.get("id", ""),
                     arxiv_id=paper.get("id", ""),
                     venue=paper.get("venue", "arXiv"),
                 )
                 result.ingestion_results.append(ingest_result.data if ingest_result.success else {"error": ingest_result.error})
+                if sse_callback:
+                    await sse_callback(json.dumps({
+                        "type": "agent_step",
+                        "step": 1000 + i,
+                        "message": f"Ingested ({i+1}/{len(unique)}): {title[:50]}...",
+                        "status": "success",
+                        "reasoning": f"Stored chunks successfully" if ingest_result.success else f"Error: {ingest_result.error}"
+                    }))
             except Exception as e:
                 log.error("Ingestion failed for %r: %s", paper.get("title", ""), e)
+                if sse_callback:
+                    await sse_callback(json.dumps({
+                        "type": "agent_step",
+                        "step": 1000 + i,
+                        "message": f"Ingestion failed ({i+1}/{len(unique)}): {title[:50]}...",
+                        "status": "error",
+                        "reasoning": str(e)
+                    }))
 
         result.duration_seconds = time.time() - start
         log.info(
@@ -161,19 +183,24 @@ class KnowledgeCrawler:
         selected_papers = []
         all_results_cache = []
         reviewed_indices = set()
+        selected_indices = set()
+        action_history = []
 
         await browser.start()
         try:
-            # Initial navigation
-            await browser.open_url("https://arxiv.org/search/")
+            import urllib.parse
+            encoded_query = urllib.parse.quote(query)
+            # Initial navigation directly to search results, sorted by relevance
+            search_url = f"https://arxiv.org/search/?query={encoded_query}&searchtype=all&abstracts=show&order=&size=50"
+            await browser.open_url(search_url)
 
             system_prompt_formatted = CRAWLER_SYSTEM_PROMPT.replace("{query}", query)
             conversation = [
                 {"role": "system", "content": system_prompt_formatted},
                 {"role": "user", "content": (
                     f'Find academic papers about: "{query}"\n'
-                    f'You are already on https://arxiv.org/search/.\n'
-                    f'Start by typing your search query into "#query" and pressing enter.'
+                    f'You are already on the arXiv search results page sorted by relevance.\n'
+                    f'Start by using the "read_results" action to view the papers.'
                 )},
             ]
 
@@ -198,6 +225,17 @@ class KnowledgeCrawler:
                     history_blocks.append(f"{role}:\n{msg['content']}")
                 
                 user_input = "\n\n---\n\n".join(history_blocks)
+
+                # Inject explicit Python-managed state to prevent context loss
+                current_state_block = (
+                    f"[CURRENT STATE]\n"
+                    f"Current URL: {browser.page.url if browser.page else 'Unknown'}\n"
+                    f"Total Results Found: {len(all_results_cache)}\n"
+                    f"Papers Selected: {len(selected_papers)} / {MIN_RELEVANT_PAPERS}\n"
+                    f"Reviewed Indices: {sorted(list(reviewed_indices))}\n"
+                    f"Selected/Rejected Indices: {sorted(list(selected_indices))}\n"
+                )
+                user_input = current_state_block + "\n\n" + user_input
 
                 llm_result = await self.llm(
                     system_prompt=system_prompt_formatted,
@@ -238,6 +276,14 @@ class KnowledgeCrawler:
                 action_type = action.get("action", "")
                 conversation.append({"role": "assistant", "content": json.dumps(action)})
                 observation = ""
+
+                # Loop detection
+                action_history.append(action_type)
+                if len(action_history) >= 4 and len(set(action_history[-4:])) == 1:
+                    observation = "ERROR: You are stuck in a loop repeating the same action. Force recovery: You MUST try a different action (e.g., go_back, read_results, or open a NEW index)."
+                    action_history.clear()
+                    conversation.append({"role": "user", "content": observation})
+                    continue
 
                 # Emit SSE for frontend
                 if sse_callback:
@@ -295,40 +341,68 @@ class KnowledgeCrawler:
 
                 elif action_type == "open_paper":
                     idx = action.get("index", -1)
-                    if 0 <= idx < len(all_results_cache):
+                    if idx in reviewed_indices:
+                        observation = f"ERROR: Index [{idx}] has already been reviewed. Please select a different, unreviewed index."
+                    elif 0 <= idx < len(all_results_cache):
                         paper = all_results_cache[idx]
                         url = paper.get("url", "")
                         if url and not url.startswith("http"):
                             url = f"https://arxiv.org{url}"
-                        await browser.open_url(url)
-                        observation = f"Opened [{idx}]. Use read_paper to read abstract."
+                        res = await browser.open_url(url)
+                        if res.get("success"):
+                            observation = f"Opened [{idx}]. Use read_paper to read abstract."
+                        else:
+                            observation = f"Failed to open [{idx}]: {res.get('error')}"
+                    else:
+                        observation = f"ERROR: Index [{idx}] is out of bounds."
 
                 elif action_type == "read_paper":
                     result = await browser.read_arxiv_paper()
                     if result["success"]:
                         reviewed_indices.add(action.get("index", -1))
                         observation = f"Title: {result.get('title', '')}\nAbstract: {result.get('abstract', '')}"
+                    else:
+                        observation = f"Failed to read paper: {result.get('error')}"
 
                 elif action_type == "select_paper":
                     idx = action.get("index", -1)
-                    if 0 <= idx < len(all_results_cache):
+                    if idx in selected_indices:
+                        observation = f"ERROR: Index [{idx}] was already selected/rejected. Move on to the next paper."
+                    elif 0 <= idx < len(all_results_cache):
+                        selected_indices.add(idx)
                         selected_papers.append(all_results_cache[idx])
                         observation = f"Selected. Have {len(selected_papers)}/{MIN_RELEVANT_PAPERS}."
+                    else:
+                        observation = f"ERROR: Invalid index [{idx}]."
 
                 elif action_type == "reject_paper":
-                    observation = "Rejected. go_back and try next paper."
+                    idx = action.get("index", -1)
+                    if idx in selected_indices:
+                        observation = f"ERROR: Index [{idx}] was already selected/rejected. Move on to the next paper."
+                    else:
+                        selected_indices.add(idx)
+                        observation = "Rejected. go_back and try next paper."
 
                 elif action_type == "go_back":
-                    await browser.go_back()
-                    observation = "Back to results. Open next un-reviewed paper."
+                    res = await browser.open_url(search_url)
+                    if res.get("success"):
+                        observation = "Reloaded the search results page. Continue selecting from where you left off."
+                    else:
+                        observation = f"Failed to reload search page: {res.get('error')}"
 
                 elif action_type == "next_page":
-                    await browser.click("a.pagination-next")
-                    observation = "Next page. Use read_results."
+                    res = await browser.click("a.pagination-next")
+                    if res.get("success"):
+                        observation = "Next page. Use read_results."
+                    else:
+                        observation = f"Failed to navigate next page: {res.get('error')}"
 
                 elif action_type == "open_url":
-                    await browser.open_url(action.get("url", ""))
-                    observation = f"Page loaded: {browser.page.url if browser.page else action.get('url')}"
+                    res = await browser.open_url(action.get("url", ""))
+                    if res.get("success"):
+                        observation = f"Page loaded: {browser.page.url if browser.page else action.get('url')}"
+                    else:
+                        observation = f"Failed to load page: {res.get('error')}"
 
                 elif action_type == "scroll_down":
                     await browser.scroll_down()
