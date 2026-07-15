@@ -41,25 +41,22 @@ Your overarching research objective is: "{query}"
 3. If search results are poor, reformulate your query but remain focused on the primary objective.
 4. Search queries must be validated against the overarching goal before typing.
 
-## MANDATORY WORKFLOW
-1. Navigate to https://arxiv.org/search/
-2. Type a search query into input#query
-3. Click button.is-link OR press enter
-4. Use read_results to get the paper list
-5. Use open_paper to open paper index 0
-6. Use read_paper to read its full abstract
-7. Decide: select_paper (if relevant) OR reject_paper (if not)
-8. Use go_back to return to results
-9. Repeat for every paper
-10. Collect at least 10 relevant papers before finishing
+## MANDATORY WORKFLOW (Follow these exact JSON actions)
+1. You are already on the search page. Type search: {"action": "type", "selector": "#query", "text": "your search term"}
+2. Get results: {"action": "read_results"}
+3. Open a paper: {"action": "open_paper", "index": 0}
+4. Read abstract: {"action": "read_paper"}
+5. Decide: {"action": "select_paper", "index": 0, "reason": "why"} OR {"action": "reject_paper", "index": 0, "reason": "why"}
+6. Go back: {"action": "go_back"}
+7. Repeat steps 3-6 for index 1, 2, 3, etc.
+8. Finish when you have at least 10 papers: {"action": "done", "summary": "Finished"}
 
-## Available actions (reply with ONE JSON action per turn)
+## Available actions (reply with ONLY ONE JSON object per turn)
 | Action | JSON |
 |--------|------|
 | Navigate | {"action": "open_url", "url": "..."} |
-| Type | {"action": "type", "selector": "CSS", "text": "..."} |
-| Click | {"action": "click", "selector": "CSS"} |
-| Press Enter | {"action": "enter"} |
+| Type & Submit | {"action": "type", "selector": "...", "text": "..."} |
+| Click | {"action": "click", "selector": "..."} |
 | Go back | {"action": "go_back"} |
 | Scroll down | {"action": "scroll_down"} |
 | Read page | {"action": "read_page"} |
@@ -72,10 +69,10 @@ Your overarching research objective is: "{query}"
 | Done | {"action": "done", "summary": "..."} |
 
 ## Rules
-- Reply with ONLY the JSON action, nothing else
-- Read each paper's abstract before selecting
-- Do NOT select tangential papers
-- Collect at least 10 relevant papers
+- Reply with ONLY the JSON action, nothing else. No markdown, no conversational text.
+- Use the selector "#query" for typing the search.
+- You must read each paper's abstract before selecting it.
+- Collect at least 10 relevant papers.
 """
 
 
@@ -175,7 +172,8 @@ class KnowledgeCrawler:
                 {"role": "system", "content": system_prompt_formatted},
                 {"role": "user", "content": (
                     f'Find academic papers about: "{query}"\n'
-                    f'Start by typing a search query into input#query and clicking the search button.'
+                    f'You are already on https://arxiv.org/search/.\n'
+                    f'Start by typing your search query into "#query" and pressing enter.'
                 )},
             ]
 
@@ -206,6 +204,7 @@ class KnowledgeCrawler:
                     user_input=user_input,
                     provider="local_llama",
                     tier="fast",
+                    json_output=True,
                     temperature=0.4,
                 )
 
@@ -221,23 +220,9 @@ class KnowledgeCrawler:
 
                 # Parse action
                 try:
-                    cleaned = llm_result.data.strip()
-                    if cleaned.startswith("```json"):
-                        cleaned = cleaned[7:]
-                    if cleaned.startswith("```"):
-                        cleaned = cleaned[3:]
-                    if cleaned.endswith("```"):
-                        cleaned = cleaned[:-3]
-                    action = json.loads(cleaned.strip())
-                except (json.JSONDecodeError, Exception):
-                    json_match = re.search(r'\{[^}]+\}', llm_result.data)
-                    if json_match:
-                        try:
-                            action = json.loads(json_match.group())
-                        except Exception:
-                            action = None
-                    else:
-                        action = None
+                    action = parse_llm_json(llm_result.data)
+                except Exception:
+                    action = None
 
                 if not action:
                     if sse_callback:
@@ -283,16 +268,21 @@ class KnowledgeCrawler:
                     observation = f"Only {len(selected_papers)} papers. Need {MIN_RELEVANT_PAPERS}. Keep searching."
 
                 elif action_type == "type":
-                    result = await browser.type_text(action.get("selector", ""), action.get("text", ""))
-                    observation = f"Typed '{action.get('text', '')}'. Now click search or press enter."
+                    selector = action.get("selector", "")
+                    text = action.get("text", "")
+                    result = await browser.type_text(selector, text)
+                    if browser.page and selector:
+                        try:
+                            await browser.page.press(selector, "Enter")
+                            import asyncio
+                            await asyncio.sleep(2)
+                        except:
+                            pass
+                    observation = f"Typed '{text}' and pressed Enter. Use read_results."
 
                 elif action_type == "click":
                     result = await browser.click(action.get("selector", ""))
                     observation = "Clicked. Use read_results to see results."
-
-                elif action_type == "enter":
-                    await browser.press_enter()
-                    observation = "Pressed Enter. Use read_results."
 
                 elif action_type == "read_results":
                     result = await browser.read_arxiv_results()
@@ -338,7 +328,7 @@ class KnowledgeCrawler:
 
                 elif action_type == "open_url":
                     await browser.open_url(action.get("url", ""))
-                    observation = "Page loaded."
+                    observation = f"Page loaded: {browser.page.url if browser.page else action.get('url')}"
 
                 elif action_type == "scroll_down":
                     await browser.scroll_down()

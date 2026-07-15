@@ -31,7 +31,7 @@ EXPORT_URL = os.getenv("EXPORT_SERVICE_URL", "http://export-service:8002")
 AGENT_URL = os.getenv("AGENT_SERVICE_URL", ORCHESTRATOR_URL)
 SEARCH_URL = os.getenv("SEARCH_SERVICE_URL", ORCHESTRATOR_URL)
 
-client = httpx.AsyncClient(timeout=300.0)
+client = httpx.AsyncClient(timeout=None)
 
 
 @app.on_event("shutdown")

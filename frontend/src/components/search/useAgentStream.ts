@@ -60,6 +60,10 @@ export function useAgentStream() {
         for (const line of lines) {
           if (line.startsWith("data: ")) {
             const dataStr = line.substring(6);
+            if (dataStr === "[DONE]") {
+              setStatus('done');
+              continue;
+            }
             try {
               const data = JSON.parse(dataStr);
               

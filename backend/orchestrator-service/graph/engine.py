@@ -17,8 +17,9 @@ import asyncio
 import json
 import logging
 import time
+import random
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import AsyncGenerator
 
 from .node import GraphNode
@@ -31,7 +32,9 @@ from workers.base import WorkerResult
 from workers.planner import PlannerWorker
 from workers.researcher import ResearcherWorker
 from workers.verification import VerificationWorker
-from workers.report_writer import ReportWriterWorker
+from workers.outliner import OutlinerWorker
+from workers.section_writer import SectionWriterWorker
+from workers.editor import EditorWorker
 from workers.reflection import ReflectionWorker
 
 log = logging.getLogger("ars.graph.engine")
@@ -134,8 +137,8 @@ class GraphEngine:
                     }
                     for c in state.citations
                 ],
-                "metrics": state.metrics.model_dump() if state.metrics else {},
-                "reflection": state.reflection.model_dump() if state.reflection else {},
+                "metrics": state.metrics.model_dump(mode="json") if state.metrics else {},
+                "reflection": state.reflection.model_dump(mode="json") if state.reflection else {},
             })
 
         except Exception as e:
@@ -165,18 +168,12 @@ class GraphEngine:
             dependencies=[],  # filled after research nodes are added
         ))
 
-        # Report Writer → depends on verification
+        # Outliner → depends on verification
         graph.add_node(GraphNode(
-            node_id="report_writer",
-            worker=ReportWriterWorker(),
+            node_id="outliner",
+            worker=OutlinerWorker(),
             dependencies=["verification"],
-        ))
-
-        # Reflection → depends on report writer
-        graph.add_node(GraphNode(
-            node_id="reflection",
-            worker=ReflectionWorker(),
-            dependencies=["report_writer"],
+            timeout=timedelta(minutes=5),
         ))
 
         return graph
@@ -213,6 +210,42 @@ class GraphEngine:
             len(sub_tasks),
             [f"research_{i}" for i in range(len(sub_tasks))],
         )
+
+    def _add_section_nodes(
+        self, graph: ExecutionGraph, state: TaskState
+    ) -> None:
+        """Dynamically add parallel section writer nodes based on outline."""
+        sections = []
+        if state.report_outline and state.report_outline.sections:
+            sections = state.report_outline.sections
+
+        section_node_ids = []
+        for i, sec in enumerate(sections):
+            node_id = f"section_writer_{i}"
+            section_node_ids.append(node_id)
+            graph.add_node(GraphNode(
+                node_id=node_id,
+                worker=SectionWriterWorker(section_name=sec.section_name, section_index=i, total_sections=len(sections)),
+                dependencies=["outliner"],
+                timeout=timedelta(minutes=10),
+            ))
+
+        # Add Editor depending on all section writers
+        graph.add_node(GraphNode(
+            node_id="editor",
+            worker=EditorWorker(),
+            dependencies=section_node_ids if section_node_ids else ["outliner"],
+            timeout=timedelta(minutes=10),
+        ))
+
+        # Add Reflection depending on editor
+        graph.add_node(GraphNode(
+            node_id="reflection",
+            worker=ReflectionWorker(),
+            dependencies=["editor"],
+        ))
+
+        log.info("Added %d section writer nodes + editor + reflection", len(section_node_ids))
 
     # ── Execution Loop ────────────────────────────────────────────
 
@@ -263,16 +296,20 @@ class GraphEngine:
                     yield event
                 if node.status == NodeStatus.COMPLETED:
                     completed.add(node.node_id)
+                    if node.node_id == "outliner":
+                        state = await self.state_manager.load_task(state.task_id)
+                        self._add_section_nodes(graph, state)
             else:
                 # Multiple nodes — execute in parallel
-                state = await self.state_manager.load_task(state.task_id)
-                results = await self._execute_parallel(batch, state)
-
-                for node, events in results:
-                    for event in events:
-                        yield event
-                    if node.status == NodeStatus.COMPLETED:
-                        completed.add(node.node_id)
+                async for msg_type, payload in self._execute_parallel(batch, state.task_id):
+                    if msg_type == "event":
+                        yield payload
+                    elif msg_type == "done":
+                        if payload.status == NodeStatus.COMPLETED:
+                            completed.add(payload.node_id)
+                            if payload.node_id == "outliner":
+                                state = await self.state_manager.load_task(state.task_id)
+                                self._add_section_nodes(graph, state)
 
     async def _execute_node(
         self, node: GraphNode, state: TaskState
@@ -339,26 +376,46 @@ class GraphEngine:
             node.mark_completed(duration_ms)
 
             # Apply state updates
-            for key, value in worker_result.state_updates.items():
-                if key in ("findings", "evidence", "citations") and isinstance(value, list):
-                    # Merge lists (parallel research nodes append)
-                    existing = getattr(state, key, [])
-                    setattr(state, key, existing + value)
-                else:
-                    setattr(state, key, value)
+            # Apply state mutations and save with optimistic locking retry
+            max_save_retries = 5
+            for save_attempt in range(max_save_retries):
+                try:
+                    if save_attempt > 0:
+                        state = await self.state_manager.load_task(state.task_id)
 
-            # Record execution event
-            state.execution_log.append(ExecutionEvent(
-                event_type=EventType.NODE_COMPLETED,
-                node_id=node.node_id,
-                worker_name=node.worker.name,
-                duration_ms=duration_ms,
-                tokens_used=worker_result.tokens_used,
-            ))
-            state.node_statuses[node.node_id] = NodeStatus.COMPLETED.value
+                    for key, value in worker_result.state_updates.items():
+                        if key in ("findings", "evidence", "citations") and isinstance(value, list):
+                            # Merge lists (parallel research nodes append)
+                            existing = getattr(state, key, [])
+                            setattr(state, key, existing + value)
+                        elif key == "report_sections" and isinstance(value, dict):
+                            # Merge dictionaries (parallel section writer nodes)
+                            existing = getattr(state, key, {})
+                            # Create a new dict to ensure Pydantic sees the mutation
+                            new_dict = existing.copy()
+                            new_dict.update(value)
+                            setattr(state, key, new_dict)
+                        else:
+                            setattr(state, key, value)
 
-            # Persist state
-            await self.state_manager.save_task(state)
+                    # Record execution event
+                    state.execution_log.append(ExecutionEvent(
+                        event_type=EventType.NODE_COMPLETED,
+                        node_id=node.node_id,
+                        worker_name=node.worker.name,
+                        duration_ms=duration_ms,
+                        tokens_used=worker_result.tokens_used,
+                    ))
+                    state.node_statuses[node.node_id] = NodeStatus.COMPLETED.value
+
+                    # Persist state
+                    await self.state_manager.save_task(state)
+                    break
+                except RuntimeError as re:
+                    if "Optimistic lock conflict" in str(re) and save_attempt < max_save_retries - 1:
+                        await asyncio.sleep(random.uniform(0.05, 0.2))
+                        continue
+                    raise
 
             # Checkpoint
             if self.checkpoint_enabled:
@@ -441,39 +498,50 @@ class GraphEngine:
     async def _execute_parallel(
         self,
         nodes: list[GraphNode],
-        state: TaskState,
-    ) -> list[tuple[GraphNode, list[str]]]:
+        state_task_id: str,
+    ) -> AsyncGenerator[tuple[str, GraphNode | str], None]:
         """
-        Execute multiple nodes in parallel using asyncio.gather.
+        Execute multiple nodes in parallel using asyncio.Queue for real-time streaming.
 
-        Returns list of (node, collected_events) tuples.
+        Yields tuples of ("event", sse_string) or ("done", node_object).
         """
+        queue = asyncio.Queue()
+        active_workers = len(nodes)
 
-        async def run_one(node: GraphNode) -> tuple[GraphNode, list[str]]:
-            events = []
-            async for event in self._execute_node(node, state):
-                events.append(event)
-            return node, events
-
-        results = await asyncio.gather(
-            *[run_one(n) for n in nodes],
-            return_exceptions=True,
-        )
-
-        # Handle any exceptions from gather
-        processed = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                node = nodes[i]
-                node.mark_failed(str(result))
-                processed.append((node, [_sse({
+        async def run_one(node: GraphNode):
+            try:
+                # Reload state for each parallel worker to minimize race conditions
+                state = await self.state_manager.load_task(state_task_id)
+                async for event in self._execute_node(node, state):
+                    await queue.put(("event", event))
+            except Exception as e:
+                node.mark_failed(str(e))
+                await queue.put(("event", _sse({
                     "type": "agent_status",
                     "agent": node.worker.name.title(),
                     "state": "failed",
                     "statusText": f"{node.worker.name} crashed",
-                    "subText": str(result)[:200],
-                })]))
-            else:
-                processed.append(result)
+                    "subText": str(e)[:200],
+                })))
+            finally:
+                await queue.put(("done", node))
 
-        return processed
+        # Start concurrent tasks
+        tasks = []
+        for n in nodes:
+            tasks.append(asyncio.create_task(run_one(n)))
+
+        try:
+            # Consume queue until all workers are done
+            while active_workers > 0:
+                msg_type, payload = await queue.get()
+                if msg_type == "done":
+                    active_workers -= 1
+                    yield ("done", payload)
+                else:
+                    yield ("event", payload)
+        finally:
+            # Clean up tasks if the generator is closed early (e.g., client disconnect)
+            for t in tasks:
+                if not t.done():
+                    t.cancel()

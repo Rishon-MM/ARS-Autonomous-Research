@@ -47,7 +47,7 @@ class ReflectionWorker(BaseWorker):
         result = WorkerResult(success=False)
         result.add_event(
             "agent_status",
-            agent="Reflection",
+            agent="Critic",
             state="working",
             statusText="Evaluating & reflecting...",
             subText="Computing metrics",
@@ -179,7 +179,7 @@ class ReflectionWorker(BaseWorker):
         }
         result.add_event(
             "agent_status",
-            agent="Reflection",
+            agent="Critic",
             state="complete",
             statusText=f"Evaluation: {reflection.outcome_type}",
             subText=(
