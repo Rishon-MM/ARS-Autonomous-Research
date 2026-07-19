@@ -13,6 +13,7 @@ import os
 from typing import Any
 
 from .base import BaseTool, ToolResult
+from observability.tracing import get_tracer
 
 log = logging.getLogger("ars.tools.llm")
 
@@ -41,10 +42,10 @@ def _get_gemini_client():
 def _get_openai_client():
     global _openai_client
     if _openai_client is None:
-        from openai import OpenAI
+        from openai import AsyncOpenAI
         api_key = os.getenv("OPENAI_API_KEY")
         if api_key:
-            _openai_client = OpenAI(api_key=api_key)
+            _openai_client = AsyncOpenAI(api_key=api_key)
         else:
             raise RuntimeError("OpenAI API key not configured")
     return _openai_client
@@ -53,9 +54,9 @@ def _get_openai_client():
 def _get_local_llama_client():
     global _local_llama_client, _local_llama_available
     if _local_llama_client is None:
-        from openai import OpenAI
+        from openai import AsyncOpenAI
         base_url = os.getenv("LOCAL_LLAMA_URL", "http://host.docker.internal:8080/v1")
-        _local_llama_client = OpenAI(base_url=base_url, api_key="not-needed")
+        _local_llama_client = AsyncOpenAI(base_url=base_url, api_key="not-needed")
         _local_llama_available = True
     return _local_llama_client
 
@@ -81,7 +82,7 @@ def _resolve_model(provider: str, tier: str) -> str:
 # ---------------------------------------------------------------------------
 # Provider dispatch functions
 # ---------------------------------------------------------------------------
-def _call_gemini(
+async def _call_gemini(
     system_prompt: str,
     user_input: str,
     model: str,
@@ -95,15 +96,15 @@ def _call_gemini(
     if json_output:
         config_kwargs["response_mime_type"] = "application/json"
 
-    response = client.models.generate_content(
+    response = await client.aio.models.generate_content(
         model=model,
         contents=[types.Content(role="user", parts=[types.Part.from_text(text=user_input)])],
-        config=types.GenerateContentConfig(**config_kwargs),
+        config=types.GenerateContentConfig(max_output_tokens=4096, **config_kwargs),
     )
     return response.text
 
 
-def _call_openai(
+async def _call_openai(
     system_prompt: str,
     user_input: str,
     model: str,
@@ -115,14 +116,24 @@ def _call_openai(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_input},
     ]
-    kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
+    kwargs: dict[str, Any] = {
+        "model": model, 
+        "messages": messages, 
+        "temperature": temperature,
+        "max_tokens": 4096,
+    }
     if json_output:
         kwargs["response_format"] = {"type": "json_object"}
-    response = client.chat.completions.create(**kwargs)
-    return response.choices[0].message.content
+    kwargs["stream"] = True
+    response = await client.chat.completions.create(**kwargs)
+    chunks = []
+    async for chunk in response:
+        if chunk.choices and chunk.choices[0].delta.content:
+            chunks.append(chunk.choices[0].delta.content)
+    return "".join(chunks)
 
 
-def _call_local_llama(
+async def _call_local_llama(
     system_prompt: str,
     user_input: str,
     model: str,
@@ -134,11 +145,21 @@ def _call_local_llama(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_input},
     ]
-    kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
+    kwargs: dict[str, Any] = {
+        "model": model, 
+        "messages": messages, 
+        "temperature": temperature,
+        "max_tokens": 4096,
+    }
     if json_output:
         kwargs["response_format"] = {"type": "json_object"}
-    response = client.chat.completions.create(**kwargs)
-    return response.choices[0].message.content
+    kwargs["stream"] = True
+    response = await client.chat.completions.create(**kwargs)
+    chunks = []
+    async for chunk in response:
+        if chunk.choices and chunk.choices[0].delta.content:
+            chunks.append(chunk.choices[0].delta.content)
+    return "".join(chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -177,16 +198,33 @@ class LLMTool(BaseTool):
         if not call_fn:
             return ToolResult(success=False, error=f"Unknown provider: {provider}")
 
-        try:
-            raw = call_fn(system_prompt, user_input, model, json_output, temperature)
-            return ToolResult(
-                success=True,
-                data=raw,
-                metadata={"provider": provider, "model": model, "tier": tier},
-            )
-        except Exception as e:
-            log.error("LLM call failed (%s/%s): %s", provider, model, e)
-            return ToolResult(success=False, error=str(e))
+        tracer = get_tracer()
+        if tracer:
+            with tracer.start_as_current_span(f"llm_generate_{provider}_{model}") as span:
+                try:
+                    raw = await call_fn(system_prompt, user_input, model, json_output, temperature)
+                    span.set_attribute("provider", provider)
+                    span.set_attribute("model", model)
+                    return ToolResult(
+                        success=True,
+                        data=raw,
+                        metadata={"provider": provider, "model": model, "tier": tier},
+                    )
+                except Exception as e:
+                    span.record_exception(e)
+                    log.error("LLM call failed (%s/%s): %s", provider, model, e)
+                    return ToolResult(success=False, error=str(e))
+        else:
+            try:
+                raw = await call_fn(system_prompt, user_input, model, json_output, temperature)
+                return ToolResult(
+                    success=True,
+                    data=raw,
+                    metadata={"provider": provider, "model": model, "tier": tier},
+                )
+            except Exception as e:
+                log.error("LLM call failed (%s/%s): %s", provider, model, e)
+                return ToolResult(success=False, error=str(e))
 
 
 def parse_llm_json(raw_text: str) -> dict:

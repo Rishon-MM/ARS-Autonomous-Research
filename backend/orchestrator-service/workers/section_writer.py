@@ -13,7 +13,7 @@ import logging
 from .base import BaseWorker, WorkerResult
 from models.task_state import TaskState
 from tools.registry import ToolRegistry
-from prompts.report_writer import SECTION_WRITER_SYSTEM_PROMPT
+from prompts.section_writer import SECTION_WRITER_SYSTEM_PROMPT
 
 log = logging.getLogger("ars.workers.section_writer")
 

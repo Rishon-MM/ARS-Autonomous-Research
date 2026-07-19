@@ -50,7 +50,7 @@ class GraphNode:
     worker: BaseWorker
     dependencies: list[str] = field(default_factory=list)
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
-    timeout: timedelta = field(default_factory=lambda: timedelta(seconds=120))
+    timeout: timedelta = field(default_factory=lambda: timedelta(minutes=10))
     status: NodeStatus = NodeStatus.PENDING
     retry_count: int = 0
 

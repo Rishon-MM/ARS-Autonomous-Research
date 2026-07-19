@@ -16,7 +16,7 @@ from models.task_state import TaskState
 from models.report import ReportOutline, ReportSection
 from tools.registry import ToolRegistry
 from tools.llm import parse_llm_json
-from prompts.report_writer import OUTLINER_SYSTEM_PROMPT
+from prompts.outliner import OUTLINER_SYSTEM_PROMPT
 
 log = logging.getLogger("ars.workers.outliner")
 

@@ -15,7 +15,7 @@ from .base import BaseWorker, WorkerResult
 from models.task_state import TaskState
 from tools.registry import ToolRegistry
 from tools.llm import parse_llm_json
-from prompts.report_writer import EDITOR_SYSTEM_PROMPT
+from prompts.editor import EDITOR_SYSTEM_PROMPT
 
 log = logging.getLogger("ars.workers.editor")
 
@@ -69,10 +69,13 @@ class EditorWorker(BaseWorker):
                     "year": c.year,
                 })
 
-        references_text = "\n".join(
-            f"[{i+1}] {s.get('title', 'Unknown')} ({s.get('year', '')})"
-            for i, s in enumerate(sources)
-        )
+        if not sources:
+            references_text = "No explicit sources were provided. Please compile a References section based on any inline citations found in the text."
+        else:
+            references_text = "\n".join(
+                f"[{i+1}] {s.get('authors', 'Unknown Authors')}. \"{s.get('title', 'Unknown Title')}\". ({s.get('year', 'n.d.')}). {s.get('url', '')}"
+                for i, s in enumerate(sources)
+            )
 
         # Assemble sections for the editor
         # Ensure we use the outline order

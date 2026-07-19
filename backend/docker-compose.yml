@@ -55,7 +55,7 @@ services:
       - "8001:8001"
     environment:
       - DATABASE_URL=postgresql://ars_user:ars_password@postgres:5432/ars_memory
-      - LOCAL_LLAMA_URL=http://host.docker.internal:8080/v1
+      - LOCAL_LLAMA_URL=http://host.docker.internal:8081/v1
       - LOCAL_LLAMA_MODEL=${LOCAL_LLAMA_MODEL}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
       - LOG_LEVEL=INFO

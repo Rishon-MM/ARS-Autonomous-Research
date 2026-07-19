@@ -13,7 +13,7 @@ import os
 log = logging.getLogger("ars.observability.tracing")
 
 
-def setup_tracing(service_name: str = "ars-orchestrator") -> None:
+def setup_tracing(service_name: str = "ars-orchestrator", app=None) -> None:
     """Initialize OpenTelemetry tracing with OTLP exporter."""
     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4317")
 
@@ -35,7 +35,10 @@ def setup_tracing(service_name: str = "ars-orchestrator") -> None:
         # Auto-instrument FastAPI
         try:
             from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-            FastAPIInstrumentor.instrument()
+            if app:
+                FastAPIInstrumentor.instrument_app(app)
+            else:
+                FastAPIInstrumentor().instrument()
         except ImportError:
             log.info("FastAPI instrumentor not available")
 

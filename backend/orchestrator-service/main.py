@@ -33,7 +33,6 @@ setup_logging(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format=os.getenv("LOG_FORMAT", "console"),
 )
-setup_tracing()
 
 log = logging.getLogger("ars.main")
 
@@ -103,6 +102,7 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+setup_tracing(app=app)
 
 # CORS
 app.add_middleware(

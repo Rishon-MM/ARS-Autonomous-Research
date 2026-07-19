@@ -44,11 +44,15 @@ export default function CitationsSidebar() {
 
   return (
     <div className="flex flex-col h-full bg-white">
-      <div className="px-5 py-4 border-b border-slate-200 flex-shrink-0">
-        <h2 className="text-sm font-semibold text-slate-800">Sources</h2>
+      <div className="px-5 py-5 bg-gradient-to-r from-slate-50 to-white border-b border-slate-200/80 flex-shrink-0 relative overflow-hidden">
+        <h2 className="text-base font-bold text-slate-800 tracking-tight flex items-center gap-2 relative z-10">
+          <BookOpen className="w-4 h-4 text-blue-500" />
+          Sources
+        </h2>
         {sources.length > 0 && (
-          <p className="text-xs text-slate-400 mt-0.5">{sources.length} sources found</p>
+          <p className="text-xs font-medium text-slate-500 mt-1 relative z-10">{sources.length} sources found</p>
         )}
+        <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 bg-blue-50 rounded-full blur-2xl opacity-60"></div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">
@@ -66,14 +70,16 @@ export default function CitationsSidebar() {
               return (
                 <div
                   key={idx}
-                  className="border border-slate-100 rounded-lg p-3 hover:border-slate-200 transition-colors"
+                  className="relative overflow-hidden bg-white border border-slate-200/60 rounded-xl p-4 shadow-[0_2px_10px_-3px_rgba(6,81,237,0.05)] hover:shadow-[0_8px_30px_-4px_rgba(6,81,237,0.12)] hover:-translate-y-1 transition-all duration-300 group"
                 >
-                  <div className="flex items-start justify-between gap-2 mb-1.5">
-                    <div className="flex items-start gap-2 min-w-0">
-                      <span className="text-blue-600 font-semibold text-xs whitespace-nowrap mt-0.5">
-                        [{idx + 1}]
+                  <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-blue-500 to-purple-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                  
+                  <div className="flex items-start justify-between gap-3 mb-2.5">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <span className="flex items-center justify-center w-5 h-5 rounded bg-blue-50 text-blue-600 font-bold text-[10px] flex-shrink-0 mt-0.5">
+                        {idx + 1}
                       </span>
-                      <h3 className="text-xs font-medium text-slate-800 leading-snug line-clamp-2">
+                      <h3 className="text-sm font-semibold text-slate-800 leading-snug group-hover:text-blue-600 transition-colors duration-200">
                         {src.title}
                       </h3>
                     </div>

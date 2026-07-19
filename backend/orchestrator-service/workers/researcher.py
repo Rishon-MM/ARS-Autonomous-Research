@@ -153,7 +153,9 @@ class ResearcherWorker(BaseWorker):
             findings.append(finding)
 
         # Build citations from search results
+        search_result_ids = set()
         for sr in state.search_results:
+            search_result_ids.add(sr.arxiv_id or sr.url)
             citations.append(Citation(
                 source_id=sr.arxiv_id or sr.url,
                 title=sr.title,
@@ -162,10 +164,25 @@ class ResearcherWorker(BaseWorker):
                 venue=sr.venue,
                 url=sr.url,
                 apa_text=(
-                    f"{', '.join(sr.authors[:3])} ({sr.year}). "
-                    f"{sr.title}. {sr.venue}."
+                    f"{', '.join(sr.authors[:3])}, \"{sr.title},\" "
+                    f"{sr.venue}, {sr.year}. {sr.url}"
                 ),
             ))
+            
+        # Add citations for any sources the LLM referenced that aren't in search_results
+        # (e.g. from internal knowledge or library papers)
+        for ev in evidence_list:
+            if ev.source_id and ev.source_id not in search_result_ids and ev.source_id != "model_knowledge":
+                search_result_ids.add(ev.source_id)
+                citations.append(Citation(
+                    source_id=ev.source_id,
+                    title=ev.source_title or ev.source_id,
+                    authors=["Internal Knowledge"],
+                    year=0,
+                    venue="",
+                    url="",
+                    apa_text=f"Internal Knowledge, \"{ev.source_title or ev.source_id},\" n.d.",
+                ))
 
         result.success = True
         result.state_updates = {

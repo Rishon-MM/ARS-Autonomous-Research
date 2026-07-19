@@ -18,13 +18,13 @@ You MUST output valid JSON matching this exact schema:
     {"question": "string", "priority": number}
   ],
   "search_queries": ["string"],
-  "desired_sections": ["Abstract", "Introduction", ..., "Discussion", "Conclusion"],
+  "desired_sections": ["Abstract", "Introduction", ..., "Discussion", "Conclusion","References"],
   "sub_tasks": ["sub-query 1 for parallel research", "sub-query 2", ...]
 }
 
 Rules:
 - Do NOT answer the topic directly — focus only on planning
-- desired_sections must start with "Abstract" and "Introduction" and end with "Discussion" and "Conclusion"
+- desired_sections must start with "Abstract" and "Introduction" and end with "Discussion" and "Conclusion",references MUST be included as the last section
 - sub_tasks should decompose the topic into independent research angles that can run in parallel
 - Each sub_task should be a self-contained search query
 - Keep outputs concise and structured
